@@ -57,6 +57,8 @@ fn outline(level: OutlineLevel) -> String {
 fn detects_language_by_extension() {
     assert_eq!(detect_language("src/main.rs"), Some(Language::Rust));
     assert_eq!(detect_language("a/b/lib.rs"), Some(Language::Rust));
+    assert_eq!(detect_language("src/app.ts"), Some(Language::TypeScript));
+    assert_eq!(detect_language("src/App.tsx"), Some(Language::Tsx));
     assert_eq!(detect_language("README.md"), None);
     assert_eq!(detect_language("Makefile"), None);
     assert_eq!(detect_language("script.py"), None);
@@ -214,4 +216,91 @@ fn handles_multibyte_source_without_panicking() {
     ] {
         let _ = render(src, Language::Rust, &symbols, level);
     }
+}
+
+const TS_SAMPLE: &str = r#"/** Area of a circle. */
+export function area(r: number): number {
+  return Math.PI * r * r;
+}
+
+function helper(): number {
+  let total = 0;
+  for (let i = 0; i < 10; i++) {
+    total += i;
+  }
+  return total;
+}
+
+export interface Drawable {
+  draw(): void;
+}
+
+export class Point {
+  constructor(public x: number, public y: number) {}
+  origin(): Point {
+    return new Point(0, 0);
+  }
+}
+
+export type Id = string;
+
+export enum Shape {
+  Circle,
+  Square,
+}
+"#;
+
+#[test]
+fn typescript_outline_keeps_signatures_and_elides_bodies() {
+    let symbols = extract(TS_SAMPLE, Language::TypeScript).expect("ts sample has symbols");
+    let out = render(
+        TS_SAMPLE,
+        Language::TypeScript,
+        &symbols,
+        OutlineLevel::Outline,
+    );
+
+    assert!(
+        out.contains("export function area(r: number): number"),
+        "got:\n{out}"
+    );
+    assert!(out.contains("function helper(): number"), "got:\n{out}");
+    assert!(
+        !out.contains("Math.PI"),
+        "function body leaked:\n{out}"
+    );
+    assert!(
+        !out.contains("total += i"),
+        "helper body leaked:\n{out}"
+    );
+    assert!(out.contains("export interface Drawable"), "got:\n{out}");
+    assert!(out.contains("draw(): void"), "got:\n{out}");
+    assert!(out.contains("export class Point"), "got:\n{out}");
+    assert!(
+        !out.contains("return new Point"),
+        "method body leaked:\n{out}"
+    );
+    assert!(out.contains("export type Id = string;"), "got:\n{out}");
+    assert!(out.contains("export enum Shape"), "got:\n{out}");
+}
+
+#[test]
+fn typescript_api_level_keeps_only_exports() {
+    let symbols = extract(TS_SAMPLE, Language::TypeScript).unwrap();
+    let out = render(TS_SAMPLE, Language::TypeScript, &symbols, OutlineLevel::Api);
+
+    assert!(out.contains("export function area"), "got:\n{out}");
+    assert!(
+        !out.contains("function helper"),
+        "private helper should be dropped:\n{out}"
+    );
+    assert!(out.contains("export interface Drawable"), "got:\n{out}");
+    assert!(out.contains("export class Point"), "got:\n{out}");
+}
+
+#[test]
+fn typescript_name_aliases() {
+    assert_eq!(Language::from_name("ts"), Some(Language::TypeScript));
+    assert_eq!(Language::from_name("typescript"), Some(Language::TypeScript));
+    assert_eq!(Language::from_name("tsx"), Some(Language::Tsx));
 }

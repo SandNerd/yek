@@ -69,6 +69,9 @@ fn walk(
             break;
         }
         let Some((kind, handling)) = lang.classify(child.kind()) else {
+            // Descend through unclassified wrappers (e.g. TS `export_statement`)
+            // without creating a symbol of their own.
+            walk(child, source, lang, depth, parent_kind, out, sink);
             continue;
         };
 
@@ -117,11 +120,19 @@ fn build_symbol(
 ) -> Symbol {
     let name = node.child_by_field_name("name").map(|n| n.byte_range());
 
-    let has_marker = match lang.visibility() {
-        VisibilityRule::Marker(marker) => has_child_kind(node, marker),
+    // For Parent visibility (TS `export …`), also pull leading trivia from the
+    // wrapper so `export` and any preceding doc comment stay in the slice.
+    let (is_exported, render_node) = match lang.visibility() {
+        VisibilityRule::Marker(marker) => (has_child_kind(node, marker), *node),
+        VisibilityRule::Parent(parent_kind) => match node.parent().filter(|p| p.kind() == parent_kind)
+        {
+            Some(parent) => (true, parent),
+            None => (false, *node),
+        },
     };
-    // Members of a trait are part of its public interface even without a marker.
-    let is_public = has_marker || parent_kind == Some(super::SymbolKind::Trait);
+    // Members of a trait/interface are part of its public surface even without
+    // an export/`pub` marker on the member itself.
+    let is_public = is_exported || parent_kind == Some(super::SymbolKind::Trait);
 
     let body = node.child_by_field_name("body");
     let (handling, body_open, body_lines) = match (handling, body) {
@@ -145,8 +156,10 @@ fn build_symbol(
         is_public,
         handling,
         name,
-        node: node.byte_range(),
-        lead_start: lead_start(node, source),
+        // ShowFull slices through `node.end`; use the wrapper's end so a trailing
+        // `;` on `export type Foo = …;` is preserved when present.
+        node: render_node.byte_range(),
+        lead_start: lead_start(&render_node, source),
         body_open,
         body_lines,
         start_row: node.start_position().row,
@@ -164,7 +177,8 @@ fn lead_start(node: &Node, source: &str) -> usize {
     let mut top_row = node.start_position().row;
     let mut sibling = node.prev_sibling();
     while let Some(s) = sibling {
-        let is_doc = matches!(s.kind(), "line_comment" | "block_comment")
+        // Rust uses `line_comment`/`block_comment`; TypeScript uses `comment`.
+        let is_doc = matches!(s.kind(), "line_comment" | "block_comment" | "comment")
             && is_doc_comment(&source[s.byte_range()]);
         if !(s.kind() == "attribute_item" || is_doc) {
             break;
