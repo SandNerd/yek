@@ -34,9 +34,10 @@ pub fn apply(files: &mut Vec<ProcessedFile>, config: &YekConfig) {
     }
 }
 
-/// Budget-aware (simple): keep the highest-priority files at full content until
-/// roughly half the budget is spent, then outline the remaining supported files.
-/// The final hard cap is still enforced by `concat_files`.
+/// Budget-aware Suffix-Floor allocator: pay the minimum outline (or full, if
+/// outlining is unsupported) cost for every file first, then greedily upgrade
+/// high-priority outlineable files to full content from the leftover
+/// discretionary budget. The final hard cap is still enforced by `concat_files`.
 fn degrade(
     files: &mut [ProcessedFile],
     config: &YekConfig,
@@ -49,9 +50,34 @@ fn degrade(
         .map(|f| outline_one(&f.rel_path, &f.content, &config.outline_languages, level))
         .collect();
 
-    let full_budget = budget(config) / 2;
+    // Pass 1: floor cost — outline size when supported, else full size.
+    let mut total_floor_cost = 0usize;
+    let mut metrics: Vec<(usize, usize)> = Vec::with_capacity(files.len());
+    for (i, file) in files.iter().enumerate() {
+        let full_size = cost(config, &file.content);
+        let outline_size = match &outlines[i] {
+            Some(rendered) => cost(config, &display(config, tag, rendered)),
+            None => full_size,
+        };
+        total_floor_cost += outline_size;
+        metrics.push((full_size, outline_size));
+    }
 
-    // Decide in priority-descending order so important files keep full content.
+    let max_tokens = budget(config);
+
+    // Even the skeleton won't fit: outline everything we can and let
+    // `concat_files` drop the low-priority tail under its hard cap.
+    if max_tokens < total_floor_cost {
+        for (i, file) in files.iter_mut().enumerate() {
+            if let Some(rendered) = &outlines[i] {
+                file.set_content(display(config, tag, rendered));
+                file.outline_level = Some(tag);
+            }
+        }
+        return;
+    }
+
+    // Priority-descending order (importance first, path as tie-break).
     let mut order: Vec<usize> = (0..files.len()).collect();
     order.sort_by(|&a, &b| {
         files[b]
@@ -60,16 +86,23 @@ fn degrade(
             .then_with(|| files[a].rel_path.cmp(&files[b].rel_path))
     });
 
-    let mut used = 0usize;
+    // Pass 2: spend discretionary budget upgrading outline → full, highest first.
+    // Do not break early — a later, smaller file may still fit.
+    let mut discretionary_budget = max_tokens.saturating_sub(total_floor_cost);
     for i in order {
-        let full_cost = cost(config, &files[i].content);
-        if used + full_cost <= full_budget {
-            used += full_cost; // keep full content
-        } else if let Some(rendered) = &outlines[i] {
+        let Some(rendered) = &outlines[i] else {
+            // Unsupported: already Full; its full cost is in the floor.
+            continue;
+        };
+        let (full_size, outline_size) = metrics[i];
+        let upgrade_cost = full_size.saturating_sub(outline_size);
+        if discretionary_budget >= upgrade_cost {
+            discretionary_budget -= upgrade_cost;
+            // Keep full content (no mutation).
+        } else {
             files[i].set_content(display(config, tag, rendered));
             files[i].outline_level = Some(tag);
         }
-        // Unsupported files that don't fit stay full; `concat_files` caps them.
     }
 }
 
@@ -113,10 +146,9 @@ fn budget(config: &YekConfig) -> usize {
     }
 }
 
-/// Approximate per-file cost. This counts the raw content only, not the template
-/// or JSON wrapper that `concat_files` adds, so it slightly under-counts. The
-/// `cap / 2` headroom for full content plus `concat_files`' exact final cap make
-/// that approximation safe; a future budget allocator can cost levels exactly.
+/// Approximate per-file cost. Counts raw content only, not the template or JSON
+/// wrapper that `concat_files` adds, so it slightly under-counts. The
+/// discretionary leftover plus `concat_files`' exact final cap keep this safe.
 fn cost(config: &YekConfig, content: &str) -> usize {
     if config.token_mode {
         crate::count_tokens(content)
