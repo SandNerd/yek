@@ -1,10 +1,10 @@
 [package]
 name = "yek"
-version = "0.21.0"
+version = "0.25.5"
 edition = "2021"
 description = "A tool to serialize a repository into chunks of text files"
 license = "MIT"
-repository = "https://github.com/bodo-run/yek"
+repository = "https://github.com/mohsen1/yek"
 authors = ["Mohsen Azimi <me@azimi.me>"]
 readme = "README.md"
 keywords = ["git", "repository", "serialization", "text", "chunks"]
@@ -19,10 +19,10 @@ outline = ["dep:tree-sitter", "dep:tree-sitter-rust"]
 [dependencies]
 anyhow = "1.0"
 atty = "0.2.14"
-bytesize = "1.3.2"
+bytesize = "2.0.1"
 clap = { version = "4.5", features = ["derive"] }
-clap-config-file = "0.5.0"
-config = "0.15.8"
+clap-config-file = "0.6.0"
+config = "0.15.11"
 content_inspector = "0.2.4"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
@@ -34,18 +34,18 @@ normalize-path = "0.2.1"
 num_cpus = "1.16"
 path-slash = "0.2.1"
 rayon = "1.8"
-regex = "1.11.1"
+regex = "1.12.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
-serde_json = "1.0.137"
+serde_json = "1.0.145"
 serde_yaml = "0.9.34"
 sha2 = "0.10"
 time = "0.3"
-toml = "0.8"
+toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 walkdir = "2.4"
-tiktoken-rs = "0.6.0"
+tiktoken-rs = "0.7.0"
 
 # Outline mode (optional; enabled by the `outline` feature).
 tree-sitter = { version = "0.25", optional = true }
@@ -55,11 +55,10 @@ tree-sitter-rust = { version = "0.24", optional = true }
 assert_cmd = "2.0"
 chrono = "0.4"
 predicates = "3.0"
-tempfile = "3.17"
+tempfile = "3.19"
 criterion = "0.5"
 rand = "0.8"
-git-cliff = "1.4.0"
-grcov = "0.8.19"
+grcov = "0.10.5"
 
 [[bench]]
 name = "serialization"

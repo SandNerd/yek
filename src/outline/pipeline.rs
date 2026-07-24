@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use super::{detect_language, extract, render, Language, OutlineLevel};
 use crate::config::{OutlineFallback, OutlineLevel as CfgLevel, OutlineMode, YekConfig};
-use crate::parallel::ProcessedFile;
+use crate::models::ProcessedFile;
 
 /// Transform `files` in place according to `config`'s outline mode.
 pub fn apply(files: &mut Vec<ProcessedFile>, config: &YekConfig) {
@@ -22,7 +22,7 @@ pub fn apply(files: &mut Vec<ProcessedFile>, config: &YekConfig) {
         OutlineMode::Always => {
             files.par_iter_mut().for_each(|f| {
                 if let Some(rendered) = outline_one(&f.rel_path, &f.content, restrict, level) {
-                    f.content = display(config, tag, &rendered);
+                    f.set_content(display(config, tag, &rendered));
                     f.outline_level = Some(tag);
                 }
             });
@@ -66,7 +66,7 @@ fn degrade(
         if used + full_cost <= full_budget {
             used += full_cost; // keep full content
         } else if let Some(rendered) = &outlines[i] {
-            files[i].content = display(config, tag, rendered);
+            files[i].set_content(display(config, tag, rendered));
             files[i].outline_level = Some(tag);
         }
         // Unsupported files that don't fit stay full; `concat_files` caps them.

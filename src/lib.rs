@@ -13,16 +13,24 @@ use std::{
 };
 use tiktoken_rs::CoreBPE;
 
+pub mod category;
 pub mod config;
 pub mod defaults;
+pub mod error;
+pub mod models;
 #[cfg(feature = "outline")]
 pub mod outline;
 pub mod parallel;
+pub mod pipeline;
 pub mod priority;
+pub mod repository;
+pub mod tree;
 
 use config::YekConfig;
-use parallel::{process_files_parallel, ProcessedFile};
+use models::ProcessedFile;
+use parallel::process_files_parallel;
 use priority::compute_recentness_boost;
+use tree::generate_tree;
 
 // Add a static BPE encoder for reuse
 static TOKENIZER: OnceLock<CoreBPE> = OnceLock::new();
@@ -55,6 +63,24 @@ pub fn is_text_file(path: &Path, user_binary_extensions: &[String]) -> io::Resul
 
 /// Main entrypoint for serialization, used by CLI and tests
 pub fn serialize_repo(config: &YekConfig) -> Result<(String, Vec<ProcessedFile>)> {
+    // Validate input paths and warn about non-existent ones
+    let mut non_existent_paths = Vec::new();
+
+    for path_str in &config.input_paths {
+        let path = Path::new(path_str);
+        // Check if path exists as a file, directory, or could be a glob pattern
+        if !path.exists() && !path_str.contains('*') && !path_str.contains('?') {
+            non_existent_paths.push(path_str.clone());
+        }
+    }
+
+    // If we have non-existent paths, warn the user
+    if !non_existent_paths.is_empty() {
+        for path in &non_existent_paths {
+            eprintln!("Warning: Path '{}' does not exist", path);
+        }
+    }
+
     // Gather commit times from each input path that is a directory
     let combined_commit_times = config
         .input_paths
@@ -106,6 +132,11 @@ pub fn serialize_repo(config: &YekConfig) -> Result<(String, Vec<ProcessedFile>)
             .then_with(|| a.rel_path.cmp(&b.rel_path))
     });
 
+    // If no files were processed and we had non-existent paths, provide additional context
+    if files.is_empty() && !non_existent_paths.is_empty() {
+        eprintln!("Warning: No files were processed. All specified paths were non-existent or contained no valid files.");
+    }
+
     // Build the final output string
     let output_string = concat_files(&files, config)?;
 
@@ -118,6 +149,22 @@ pub fn serialize_repo(config: &YekConfig) -> Result<(String, Vec<ProcessedFile>)
 }
 
 pub fn concat_files(files: &[ProcessedFile], config: &YekConfig) -> anyhow::Result<String> {
+    // Generate tree header if requested
+    let tree_header = if config.tree_header || config.tree_only {
+        let file_paths: Vec<std::path::PathBuf> = files
+            .iter()
+            .map(|f| std::path::PathBuf::from(&f.rel_path))
+            .collect();
+        generate_tree(&file_paths)
+    } else {
+        String::new()
+    };
+
+    // If tree_only is requested, return just the tree
+    if config.tree_only {
+        return Ok(tree_header);
+    }
+
     let mut accumulated = 0_usize;
     let cap = if config.token_mode {
         parse_token_limit(&config.tokens)?
@@ -126,6 +173,19 @@ pub fn concat_files(files: &[ProcessedFile], config: &YekConfig) -> anyhow::Resu
             .map_err(|e| anyhow!("max_size: Invalid size format: {}", e))?
             .as_u64() as usize
     };
+
+    // Account for tree header size in capacity calculations
+    let tree_header_size = if config.tree_header {
+        if config.token_mode {
+            count_tokens(&tree_header)
+        } else {
+            tree_header.len()
+        }
+    } else {
+        0
+    };
+
+    accumulated += tree_header_size;
 
     // Select most-important-first so that, when the budget is tight, it is the
     // least important files that get dropped (not the most important ones).
@@ -140,18 +200,25 @@ pub fn concat_files(files: &[ProcessedFile], config: &YekConfig) -> anyhow::Resu
     for file in by_priority {
         let content_size = if config.token_mode {
             // Format the file content with template first, then count tokens
+            let content = format_content_with_line_numbers(&file.content, config.line_numbers);
             let formatted = if config.json {
-                serde_json::to_string(&file_json(file))
+                serde_json::to_string(&file_json(file, config.line_numbers))
                     .map_err(|e| anyhow!("Failed to serialize JSON: {}", e))?
             } else {
                 config
                     .output_template
+                    .as_ref()
+                    .expect("output_template should be set")
                     .replace("FILE_PATH", &file.rel_path)
-                    .replace("FILE_CONTENT", &file.content)
+                    .replace("FILE_CONTENT", &content)
+                    // Handle both literal "\n" and escaped "\\n"
+                    .replace("\\\\\n", "\n") // First handle escaped newline
+                    .replace("\\\\n", "\n") // Then handle escaped \n sequence
             };
             count_tokens(&formatted)
         } else {
-            file.content.len()
+            let content = format_content_with_line_numbers(&file.content, config.line_numbers);
+            content.len()
         };
 
         if accumulated + content_size <= cap {
@@ -173,38 +240,49 @@ pub fn concat_files(files: &[ProcessedFile], config: &YekConfig) -> anyhow::Resu
             .then_with(|| a.rel_path.cmp(&b.rel_path))
     });
 
-    if config.json {
+    let main_content = if config.json {
         // JSON array of objects
-        Ok(serde_json::to_string_pretty(
+        serde_json::to_string_pretty(
             &files_to_include
                 .iter()
-                .map(|f| file_json(f))
+                .map(|f| file_json(f, config.line_numbers))
                 .collect::<Vec<_>>(),
-        )?)
+        )?
     } else {
         // Use the user-defined template
-        Ok(files_to_include
+        files_to_include
             .iter()
             .map(|f| {
+                let content = format_content_with_line_numbers(&f.content, config.line_numbers);
                 config
                     .output_template
+                    .as_ref()
+                    .expect("output_template should be set")
                     .replace("FILE_PATH", &f.rel_path)
-                    .replace("FILE_CONTENT", &f.content)
+                    .replace("FILE_CONTENT", &content)
                     // Handle both literal "\n" and escaped "\\n"
                     .replace("\\\\\n", "\n") // First handle escaped newline
                     .replace("\\\\n", "\n") // Then handle escaped \n sequence
             })
             .collect::<Vec<_>>()
-            .join("\n"))
+            .join("\n")
+    };
+
+    // Combine tree header with main content
+    if config.tree_header {
+        Ok(format!("{}{}", tree_header, main_content))
+    } else {
+        Ok(main_content)
     }
 }
 
 /// Build the JSON object for one file, including an outline `level` field when
 /// the file's content was abbreviated.
-fn file_json(file: &ProcessedFile) -> serde_json::Value {
+fn file_json(file: &ProcessedFile, line_numbers: bool) -> serde_json::Value {
+    let content = format_content_with_line_numbers(&file.content, line_numbers);
     let mut obj = serde_json::json!({
         "filename": &file.rel_path,
-        "content": &file.content,
+        "content": content,
     });
     if let Some(level) = file.outline_level {
         obj["level"] = serde_json::Value::String(level.to_string());
@@ -212,14 +290,46 @@ fn file_json(file: &ProcessedFile) -> serde_json::Value {
     obj
 }
 
+/// Format file content with line numbers if requested
+fn format_content_with_line_numbers(content: &str, include_line_numbers: bool) -> String {
+    if !include_line_numbers {
+        return content.to_string();
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+
+    // Calculate the width needed for the largest line number, with minimum width of 3
+    let width = if total_lines == 0 {
+        3
+    } else {
+        std::cmp::max(3, total_lines.to_string().len())
+    };
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:width$} | {}", i + 1, line, width = width))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Parse a token limit string like "800k" or "1000" into a number
 pub fn parse_token_limit(limit: &str) -> anyhow::Result<usize> {
     if limit.to_lowercase().ends_with('k') {
-        limit[..limit.len() - 1]
-            .trim()
-            .parse::<usize>()
-            .map(|n| n * 1000)
-            .map_err(|e| anyhow!("tokens: Invalid token size: {}", e))
+        // Use UTF-8 aware slicing to handle emojis and other multi-byte characters
+        let chars: Vec<char> = limit.chars().collect();
+        if chars.len() > 1 {
+            chars[..chars.len() - 1]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .parse::<usize>()
+                .map(|n| n * 1000)
+                .map_err(|e| anyhow!("tokens: Invalid token size: {}", e))
+        } else {
+            Err(anyhow!("tokens: Invalid token format: {}", limit))
+        }
     } else {
         limit
             .parse::<usize>()

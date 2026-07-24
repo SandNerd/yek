@@ -4,6 +4,7 @@ mod extra_tests {
     use std::fs;
     use std::io::Write;
 
+    use assert_cmd::Command;
     use tempfile::tempdir;
     use yek::{
         concat_files,
@@ -78,6 +79,23 @@ mod extra_tests {
             0,
             "No files should be processed for a non-existent directory"
         );
+    }
+
+    // Test that warnings are displayed for non-existent paths by capturing stderr.
+    #[test]
+    fn test_warning_for_nonexistent_paths() {
+        // Run yek with a non-existent path and capture stderr
+        let output = Command::cargo_bin("yek")
+            .expect("Failed to find yek binary")
+            .arg("definitely_nonexistent_path_12345")
+            .output()
+            .expect("Failed to execute yek");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Should contain both warnings
+        assert!(stderr.contains("Warning: Path 'definitely_nonexistent_path_12345' does not exist"));
+        assert!(stderr.contains("Warning: No files were processed. All specified paths were non-existent or contained no valid files."));
     }
 
     // Test process_files_parallel with an empty directory.

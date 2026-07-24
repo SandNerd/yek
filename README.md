@@ -51,7 +51,7 @@ Choose the installation method for your platform:
 <!-- UNIX_INSTALLATION_BEGIN -->
 
 ```bash
-curl -fsSL https://bodo.run/yek.sh | bash
+curl -fsSL https://azimi.me/yek.sh | bash
 ```
 
 <!-- UNIX_INSTALLATION_END -->
@@ -61,7 +61,7 @@ For Windows (PowerShell):
 <!-- WINDOWS_INSTALLATION_BEGIN -->
 
 ```powershell
-irm https://bodo.run/yek.ps1 | iex
+irm https://azimi.me/yek.ps1 | iex
 ```
 
 <!-- WINDOWS_INSTALLATION_END -->
@@ -70,7 +70,7 @@ irm https://bodo.run/yek.ps1 | iex
 <summary style="cursor: pointer;">Build from Source</summary>
 
 ```bash
-git clone https://github.com/bodo-run/yek
+git clone https://github.com/mohsen1/yek
 cd yek
 cargo install --path .
 ```
@@ -114,7 +114,7 @@ Process multiple directories:
 yek src/ tests/
 ```
 
-Porcess multiple files
+Process multiple files
 
 ```bash
 yek file1.txt file2.txt file3.txt
@@ -137,29 +137,59 @@ yek "src/main.rs" "tests/*.rs" "docs/README.md"
 
 ```bash
 yek --help
-Usage: yek [OPTIONS] [input-dirs]...
+Usage: yek [OPTIONS] [input-paths]...
 
 Arguments:
-  [input-dirs]...
+  [input-paths]...                Input files and/or directories to process
 
 Options:
-      --no-config
-      --config-file <CONFIG_FILE>
-      --max-size <MAX_SIZE>                       [default: 10MB]
-      --tokens <TOKENS>
-      --json
-      --debug
-      --output-dir [<OUTPUT_DIR>]
-      --output-template <OUTPUT_TEMPLATE>         [default: ">>>> FILE_PATH\nFILE_CONTENT"]
-      --ignore-patterns <IGNORE_PATTERNS>...
-      --unignore-patterns <UNIGNORE_PATTERNS>...
+      --no-config                              Do not use a config file
+      --config-file <CONFIG_FILE>              Path to the config file
+  -V, --version                                Print version of yek
+      --max-size <MAX_SIZE>                    Max size per chunk. e.g. "10MB" or "128K" or when using token counting mode, "100" or "128K" [default: 10MB]
+      --tokens <TOKENS>                        Use token mode instead of byte mode
+      --json                                   Enable JSON output
+      --debug                                  Enable debug output
+      --line-numbers                           Include line numbers in output
+      --output-dir [<OUTPUT_DIR>]              Output directory. If none is provided & stdout is a TTY, we pick a temp dir
+      --output-name [<OUTPUT_NAME>]            Output filename. If provided, write output to this file in current directory
+      --output-template [<OUTPUT_TEMPLATE>]    Output template. Defaults to ">>>> FILE_PATH\nFILE_CONTENT"
+      --ignore-patterns <IGNORE_PATTERNS>...  Ignore patterns
+      --unignore-patterns <UNIGNORE_PATTERNS>... Unignore patterns. Yek has some built-in ignore patterns, but you can override them here.
+  -t, --tree-header                            Include directory tree header in output (incompatible with JSON output)
+      --tree-only                              Show only the directory tree (no file contents, incompatible with JSON output)
       --outline                                   Shorthand for --outline-mode always
       --outline-mode <OUTLINE_MODE>               off | always | degrade [default: off]
       --outline-level <OUTLINE_LEVEL>             outline | api | symbols [default: outline]
       --outline-languages <OUTLINE_LANGUAGES>...
       --outline-fallback <OUTLINE_FALLBACK>       full | omit [default: full]
-  -h, --help                                      Print help
+  -h, --help                                   Print help
 ```
+
+#### CLI Options Detail
+
+- `[input-paths]...` - Files or directories to process. Supports glob patterns (quote them to prevent shell expansion)
+- `--no-config` - Skip loading any configuration file
+- `--config-file <CONFIG_FILE>` - Use a specific configuration file path instead of searching for default config files
+- `-V, --version` - Print version information and exit
+- `--max-size <MAX_SIZE>` - Maximum size limit per output (e.g., "10MB", "128K"). Used in byte mode
+- `--tokens <TOKENS>` - Use token-based counting instead of bytes (e.g., "128k", "100"). Enables token mode
+- `--json` - Output results in JSON format instead of text
+- `--debug` - Enable debug logging for troubleshooting
+- `--line-numbers` - Include line numbers in the output for each file
+- `--output-dir [<OUTPUT_DIR>]` - Directory to write output files. If not specified and not streaming, uses temp directory
+- `--output-name [<OUTPUT_NAME>]` - Specific filename for output. If specified, writes to current directory with this name
+- `--output-template [<OUTPUT_TEMPLATE>]` - Template for formatting output. Use `FILE_PATH` and `FILE_CONTENT` placeholders
+- `--ignore-patterns <IGNORE_PATTERNS>...` - Additional patterns to ignore (extends .gitignore and defaults)
+- `--unignore-patterns <UNIGNORE_PATTERNS>...` - Patterns to override built-in ignore rules
+- `-t, --tree-header` - Include a directory tree at the beginning of output (incompatible with JSON)
+- `--tree-only` - Show only the directory tree structure without file contents (incompatible with JSON)
+- `--outline` - Shorthand for `--outline-mode always`
+- `--outline-mode <OUTLINE_MODE>` - Outline mode: `off`, `always`, or `degrade` (requires `--features outline`)
+- `--outline-level <OUTLINE_LEVEL>` - Detail level: `outline`, `api`, or `symbols`
+- `--outline-languages <OUTLINE_LANGUAGES>...` - Restrict outlining to these languages
+- `--outline-fallback <OUTLINE_FALLBACK>` - Unsupported language handling: `full` or `omit`
+
 
 ### Outline mode (experimental)
 
@@ -190,14 +220,42 @@ field. All of these can also be set in `yek.yaml` (`outline_mode`,
 
 ## Configuration File
 
-You can place a file called `yek.yaml` at your project root or pass a custom path via `--config`. The configuration file allows you to:
+You can place a file called `yek.yaml` at your project root or pass a custom path via `--config-file`. The configuration file allows you to:
 
 1. Add custom ignore patterns
 2. Define file priority rules for processing order
 3. Add additional binary file extensions to ignore (extends the built-in list)
 4. Configure Git-based priority boost
-5. Define output directory
-6. Define output template
+5. Define output directory and output filename
+6. Define output template and other output options
+
+### Configurable Options
+
+Most CLI options can be configured in the config file. The following options can be set:
+
+**File Processing:**
+- `max_size` - Size limit (same as `--max-size`)
+- `tokens` - Token count limit (same as `--tokens`)
+- `ignore_patterns` - Additional ignore patterns (same as `--ignore-patterns`)
+- `unignore_patterns` - Override built-in ignores (same as `--unignore-patterns`)
+
+**Output Configuration:**
+- `json` - Enable JSON output (same as `--json`)
+- `debug` - Enable debug mode (same as `--debug`)
+- `line_numbers` - Include line numbers (same as `--line-numbers`)
+- `output_dir` - Output directory (same as `--output-dir`)
+- `output_name` - Output filename (same as `--output-name`)
+- `output_template` - Output template (same as `--output-template`)
+- `tree_header` - Include directory tree header (same as `--tree-header`)
+- `tree_only` - Show only directory tree (same as `--tree-only`)
+
+**Config-only Options:**
+- `priority_rules` - File priority rules (config file only)
+- `binary_extensions` - Additional binary file extensions (config file only)
+- `git_boost_max` - Maximum Git-based priority boost (config file only)
+
+> [!NOTE]
+> Some CLI options like `--no-config`, `--config-file`, and `--version` are CLI-only and cannot be set in config files.
 
 ### Example `yek.yaml`
 
@@ -208,7 +266,7 @@ This is optional, you can configure the `yek.yaml` file at the root of your proj
 ```yaml
 # Add patterns to ignore (in addition to .gitignore)
 ignore_patterns:
-  - "ai-promots/**"
+  - "ai-prompts/**"
   - "__generated__/**"
 
 # Configure Git-based priority boost (optional)
@@ -232,20 +290,23 @@ binary_extensions:
   - ".max" # 3ds Max files
   - ".psd" # Photoshop files
 
+# Output configuration
+max_size: "128K"           # Size limit (can also use tokens: "100k")
+json: false                # Enable JSON output
+debug: false               # Enable debug logging
+line_numbers: false        # Include line numbers in output
+tree_header: false         # Include directory tree at start
+
 # Define output directory
 output_dir: /tmp/yek
 
+# Define output filename (writes to current directory with this name)
+output_name: yek-output.txt
+
 # Define output template.
 # FILE_PATH and FILE_CONTENT are expected to be present in the template.
-output_template: "{{{FILE_PATH}}}\n\nFILE_CONTENT"
+output_template: "FILE_PATH\n\nFILE_CONTENT"
 ```
-
-All configuration keys are optional. By default:
-
-- No extra ignore patterns, only the ones from `.gitignore` are used.
-- All files have equal priority (score: 1)
-- Git-based priority boost maximum is 100
-- Common binary file extensions are ignored (.jpg, .png, .exe, etc. - see source for full list)
 
 ## Performance
 
@@ -271,7 +332,7 @@ Executed in   22.24 mins    fish           external
 
 ## Roadmap
 
-See [proposed features](https://github.com/bodo-run/yek/issues?q=type:%22Feature%22). I am open to accepting new feature requests. Please write a detailed proposal to discuss new features.
+See [proposed features](https://github.com/mohsen1/yek/issues?q=type:%22Feature%22). I am open to accepting new feature requests. Please write a detailed proposal to discuss new features.
 
 ## Alternatives
 

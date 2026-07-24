@@ -22,7 +22,7 @@ jobs:
             script_section: UNIX_INSTALLATION
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            shell: powershell
+            shell: pwsh
             script_section: WINDOWS_INSTALLATION
     runs-on: ${{ matrix.os }}
     steps:
@@ -34,13 +34,20 @@ jobs:
         run: |
           script=$(awk '/<!-- ${{ matrix.script_section }}_BEGIN -->/{p=1;next}/<!-- ${{ matrix.script_section }}_END -->/{p=0}p' README.md | grep -v '^```')
           [ -n "$script" ] || { echo "Could not extract installation script"; exit 1; }
-          script="${script//'%'/'%25'}"
-          script="${script//$'\n'/'%0A'}"
-          script="${script//$'\r'/'%0D'}"
-          echo "script=$script" >> $GITHUB_OUTPUT
+          {
+            echo "script<<EOF"
+            echo "$script"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Test installation script
+      - name: Test installation script (Unix)
+        if: matrix.shell == 'bash'
         shell: bash
+        run: ${{ steps.get_install_script.outputs.script }}
+
+      - name: Test installation script (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ${{ steps.get_install_script.outputs.script }}
 
       - name: Verify final installation
