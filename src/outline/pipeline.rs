@@ -56,7 +56,10 @@ fn degrade(
     for (i, file) in files.iter().enumerate() {
         let full_size = cost(config, &file.content);
         let outline_size = match &outlines[i] {
-            Some(rendered) => cost(config, &display(config, tag, rendered)),
+            Some(rendered) => {
+                let rendered_size = cost(config, &display(config, tag, rendered));
+                std::cmp::min(full_size, rendered_size)
+            }
             None => full_size,
         };
         total_floor_cost += outline_size;
