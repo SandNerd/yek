@@ -87,10 +87,15 @@ fn render_one(
                 }
                 render_one(source, lang, symbols, child as usize, api_only, buf);
             }
-            buf.push_str(&indent);
             match lang.elision() {
-                ElisionStyle::Braces => buf.push_str("}\n"),
-                ElisionStyle::PythonStyle => {} // Python has no closing delimiter
+                ElisionStyle::Braces => {
+                    buf.push_str(&indent);
+                    buf.push_str("}\n");
+                }
+                ElisionStyle::PythonStyle => {
+                    // Python containers have no closing delimiter, so the last
+                    // child already emitted its trailing newline.  No-op.
+                }
             }
         }
     }

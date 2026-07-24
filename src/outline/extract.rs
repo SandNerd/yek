@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
 use super::lang::{Language, VisibilityRule};
-use super::{Handling, Symbol};
+use super::{Handling, Symbol, SymbolKind};
 
 /// Hard cap on declarations recorded per file, so a pathological generated file
 /// cannot blow up memory or output.
@@ -70,20 +70,25 @@ fn walk(
         }
 
         // In Python, a `decorated_definition` wraps decorators and the actual
-        // definition. Treat the whole decorated node as the declaration so that
-        // decorator lines are preserved in the rendered output.
+        // definition.  We build the *body*-sensitive fields from the inner
+        // definition node (so `child_by_field_name("body")` works), then extend
+        // the symbol's range to cover the outer `child` so decorator lines are
+        // preserved in the rendered output.
         if lang == Language::Python && child.kind() == "decorated_definition" {
-            // Find the inner definition (typically the last child).
             let inner = child.children(&mut child.walk()).last().and_then(|last| {
                 let (kind, handling) = lang.classify(last.kind())?;
                 Some((last, kind, handling))
             });
             if let Some((def_node, kind, handling)) = inner {
-                // Build a symbol with the outer node (for decorator range) but
-                // extract the name from the inner definition.
                 let mut sym =
-                    build_symbol(&child, source, lang, kind, handling, depth, parent_kind);
-                // Override name from the inner definition node.
+                    build_symbol(&def_node, source, lang, kind, handling, depth, parent_kind);
+                // Override the symbol's byte range to cover the outer
+                // decorated_definition node so @decorators are included.
+                sym.node = child.byte_range();
+                sym.lead_start = child.start_byte();
+                sym.start_row = child.start_position().row;
+                sym.end_row = child.end_position().row;
+                // Name still comes from the inner definition.
                 sym.name = def_node.child_by_field_name("name").map(|n| n.byte_range());
                 let idx = out.len() as u32;
                 out.push(sym);
@@ -107,9 +112,20 @@ fn walk(
             }
         }
 
-        let Some((kind, handling)) = lang.classify(child.kind()) else {
-            // Descend through unclassified wrappers (e.g. TS `export_statement`)
-            // without creating a symbol of their own.
+        // Python `expression_statement` wrapping a type-annotated `assignment`.
+        // This covers class body declarations like `host: str = "localhost"`.
+        let classified = if lang == Language::Python && child.kind() == "expression_statement" {
+            child
+                .child(0)
+                .filter(|expr| {
+                    expr.kind() == "assignment" && expr.child_by_field_name("type").is_some()
+                })
+                .map(|_| (SymbolKind::Static, Handling::ShowFull))
+        } else {
+            lang.classify(child.kind())
+        };
+
+        let Some((kind, handling)) = classified else {
             walk(child, source, lang, depth, parent_kind, out, sink);
             continue;
         };
