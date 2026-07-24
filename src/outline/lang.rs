@@ -12,6 +12,8 @@ use super::{Handling, SymbolKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Language {
     Rust,
+    TypeScript,
+    Tsx,
 }
 
 /// How to decide whether a declaration is part of the public API.
@@ -19,6 +21,8 @@ pub enum Language {
 pub(crate) enum VisibilityRule {
     /// Public iff the node has a direct child of this kind (e.g. Rust `pub`).
     Marker(&'static str),
+    /// Public iff wrapped by a parent node of this kind (e.g. TS `export_statement`).
+    Parent(&'static str),
 }
 
 /// How elided bodies are rendered.
@@ -31,13 +35,15 @@ pub(crate) enum ElisionStyle {
 impl Language {
     /// All languages compiled into this build.
     pub fn all() -> &'static [Language] {
-        &[Language::Rust]
+        &[Language::Rust, Language::TypeScript, Language::Tsx]
     }
 
     /// Canonical lowercase name, used by `--outline-languages` and `--json`.
     pub fn name(self) -> &'static str {
         match self {
             Language::Rust => "rust",
+            Language::TypeScript => "typescript",
+            Language::Tsx => "tsx",
         }
     }
 
@@ -45,6 +51,8 @@ impl Language {
     pub fn from_name(name: &str) -> Option<Language> {
         match name.trim().to_ascii_lowercase().as_str() {
             "rust" | "rs" => Some(Language::Rust),
+            "typescript" | "ts" => Some(Language::TypeScript),
+            "tsx" => Some(Language::Tsx),
             _ => None,
         }
     }
@@ -53,6 +61,8 @@ impl Language {
     pub(crate) fn ts_language(self) -> tree_sitter::Language {
         match self {
             Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
         }
     }
 
@@ -80,19 +90,45 @@ impl Language {
                 "mod_item" => Some((SymbolKind::Module, Handling::Recurse)),
                 _ => None,
             },
+            Language::TypeScript | Language::Tsx => classify_typescript(node_kind),
         }
     }
 
     pub(crate) fn visibility(self) -> VisibilityRule {
         match self {
             Language::Rust => VisibilityRule::Marker("visibility_modifier"),
+            // `export function …` / `export class …` wraps the declaration in
+            // an `export_statement` parent rather than attaching a child marker.
+            Language::TypeScript | Language::Tsx => VisibilityRule::Parent("export_statement"),
         }
     }
 
     pub(crate) fn elision(self) -> ElisionStyle {
         match self {
-            Language::Rust => ElisionStyle::Braces,
+            Language::Rust | Language::TypeScript | Language::Tsx => ElisionStyle::Braces,
         }
+    }
+}
+
+/// Shared classification for TypeScript and TSX (same declaration node kinds).
+fn classify_typescript(node_kind: &str) -> Option<(SymbolKind, Handling)> {
+    match node_kind {
+        "function_declaration" | "generator_function_declaration" => {
+            Some((SymbolKind::Function, Handling::Elide))
+        }
+        "method_definition" => Some((SymbolKind::Function, Handling::Elide)),
+        // Bodyless signatures (interfaces / abstract classes): show verbatim.
+        "method_signature" | "abstract_method_signature" => {
+            Some((SymbolKind::Function, Handling::ShowFull))
+        }
+        "class_declaration" | "abstract_class_declaration" => {
+            Some((SymbolKind::Struct, Handling::Recurse))
+        }
+        // Closest existing kind: interfaces expose a public surface like traits.
+        "interface_declaration" => Some((SymbolKind::Trait, Handling::Recurse)),
+        "type_alias_declaration" => Some((SymbolKind::Type, Handling::ShowFull)),
+        "enum_declaration" => Some((SymbolKind::Enum, Handling::ShowFull)),
+        _ => None,
     }
 }
 
@@ -101,6 +137,8 @@ pub fn detect_language(rel_path: &str) -> Option<Language> {
     let ext = Path::new(rel_path).extension()?.to_str()?;
     match ext {
         "rs" => Some(Language::Rust),
+        "ts" => Some(Language::TypeScript),
+        "tsx" => Some(Language::Tsx),
         _ => None,
     }
 }
