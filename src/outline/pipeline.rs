@@ -73,8 +73,13 @@ fn degrade(
     if max_tokens < total_floor_cost {
         for (i, file) in files.iter_mut().enumerate() {
             if let Some(rendered) = &outlines[i] {
-                file.set_content(display(config, tag, rendered));
-                file.outline_level = Some(tag);
+                let (full_size, outline_size) = metrics[i];
+                // Skip when the outline is no smaller than the raw file (common
+                // for tiny sources where the `(outline)` tag alone dominates).
+                if outline_size < full_size {
+                    file.set_content(display(config, tag, rendered));
+                    file.outline_level = Some(tag);
+                }
             }
         }
         return;
