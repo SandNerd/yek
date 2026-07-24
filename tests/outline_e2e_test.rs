@@ -87,24 +87,32 @@ fn json_output_includes_level_field() {
     assert!(out.contains("\"outline\""));
 }
 
+/// Build a function whose body is large enough that upgrading outline→full
+/// costs real tokens (so the discretionary budget can admit only one upgrade).
+fn bulky_fn(name: &str, lines: usize) -> String {
+    let mut s = format!("pub fn {name}() {{\n");
+    for i in 0..lines {
+        s.push_str(&format!("    let v{i} = {i};\n"));
+    }
+    s.push_str("}\n");
+    s
+}
+
 #[test]
 fn degrade_keeps_high_priority_full_and_outlines_rest() {
     let dir = TempDir::new().unwrap();
     fs::write(
         dir.path().join("important.rs"),
-        "pub fn important_thing() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n}\n",
+        bulky_fn("important_thing", 80),
     )
     .unwrap();
-    fs::write(
-        dir.path().join("minor.rs"),
-        "pub fn minor_thing() {\n    let x = 10;\n    let y = 20;\n    let z = 30;\n}\n",
-    )
-    .unwrap();
+    fs::write(dir.path().join("minor.rs"), bulky_fn("minor_thing", 80)).unwrap();
 
     let mut cfg = config_for(&dir);
     cfg.outline_mode = Some(OutlineMode::Degrade);
     cfg.token_mode = true;
-    cfg.tokens = "80".to_string();
+    // Floor ≈ 2×outline (~48); one upgrade ≈624. 700 admits exactly one Full.
+    cfg.tokens = "700".to_string();
     cfg.priority_rules = vec![
         PriorityRule {
             pattern: "important.rs".to_string(),
