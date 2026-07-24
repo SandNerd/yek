@@ -68,6 +68,45 @@ fn walk(
         if out.len() >= MAX_SYMBOLS {
             break;
         }
+
+        // In Python, a `decorated_definition` wraps decorators and the actual
+        // definition. Treat the whole decorated node as the declaration so that
+        // decorator lines are preserved in the rendered output.
+        if lang == Language::Python && child.kind() == "decorated_definition" {
+            // Find the inner definition (typically the last child).
+            let inner = child.children(&mut child.walk()).last().and_then(|last| {
+                let (kind, handling) = lang.classify(last.kind())?;
+                Some((last, kind, handling))
+            });
+            if let Some((def_node, kind, handling)) = inner {
+                // Build a symbol with the outer node (for decorator range) but
+                // extract the name from the inner definition.
+                let mut sym =
+                    build_symbol(&child, source, lang, kind, handling, depth, parent_kind);
+                // Override name from the inner definition node.
+                sym.name = def_node.child_by_field_name("name").map(|n| n.byte_range());
+                let idx = out.len() as u32;
+                out.push(sym);
+                sink.push(idx);
+                if handling == Handling::Recurse {
+                    if let Some(body) = def_node.child_by_field_name("body") {
+                        let mut children = Vec::new();
+                        walk(
+                            body,
+                            source,
+                            lang,
+                            depth + 1,
+                            Some(kind),
+                            out,
+                            &mut children,
+                        );
+                        out[idx as usize].children = children;
+                    }
+                }
+                continue;
+            }
+        }
+
         let Some((kind, handling)) = lang.classify(child.kind()) else {
             // Descend through unclassified wrappers (e.g. TS `export_statement`)
             // without creating a symbol of their own.
@@ -123,12 +162,14 @@ fn build_symbol(
     // For Parent visibility (TS `export …`), also pull leading trivia from the
     // wrapper so `export` and any preceding doc comment stay in the slice.
     let (is_exported, render_node) = match lang.visibility() {
+        VisibilityRule::Public => (true, *node),
         VisibilityRule::Marker(marker) => (has_child_kind(node, marker), *node),
-        VisibilityRule::Parent(parent_kind) => match node.parent().filter(|p| p.kind() == parent_kind)
-        {
-            Some(parent) => (true, parent),
-            None => (false, *node),
-        },
+        VisibilityRule::Parent(parent_kind) => {
+            match node.parent().filter(|p| p.kind() == parent_kind) {
+                Some(parent) => (true, parent),
+                None => (false, *node),
+            }
+        }
     };
     // Members of a trait/interface are part of its public surface even without
     // an export/`pub` marker on the member itself.
@@ -136,16 +177,47 @@ fn build_symbol(
 
     let body = node.child_by_field_name("body");
     let (handling, body_open, body_lines) = match (handling, body) {
-        (Handling::Elide, Some(b)) => (
-            Handling::Elide,
-            Some(b.start_byte()),
-            // Lines of hidden content: the `{` and `}` lines stay, so exclude them.
-            (b.end_position()
-                .row
-                .saturating_sub(b.start_position().row)
-                .saturating_sub(1)) as u32,
-        ),
-        (Handling::Recurse, Some(b)) => (Handling::Recurse, Some(b.start_byte()), 0),
+        (Handling::Elide, Some(b)) => {
+            let open = match lang.elision() {
+                super::lang::ElisionStyle::PythonStyle => {
+                    // For Python, the `:` that introduces the body block is not
+                    // part of the `body` node.  We adjust `body_open` to the
+                    // byte *after* the colon so the rendered header includes
+                    // `:`.  We scan backward from the body to find the colon.
+                    let source_bytes = source.as_bytes();
+                    let mut pos = b.start_byte();
+                    while pos > 0 && source_bytes[pos - 1] != b':' {
+                        pos -= 1;
+                    }
+                    // pos is the byte after `:` because the loop exited when
+                    // source_bytes[pos-1] == ':'.
+                    pos
+                }
+                _ => b.start_byte(),
+            };
+            (
+                Handling::Elide,
+                Some(open),
+                (b.end_position()
+                    .row
+                    .saturating_sub(b.start_position().row)
+                    .saturating_sub(1)) as u32,
+            )
+        }
+        (Handling::Recurse, Some(b)) => {
+            let open = match lang.elision() {
+                super::lang::ElisionStyle::PythonStyle => {
+                    let source_bytes = source.as_bytes();
+                    let mut pos = b.start_byte();
+                    while pos > 0 && source_bytes[pos - 1] != b':' {
+                        pos -= 1;
+                    }
+                    pos
+                }
+                _ => b.start_byte(),
+            };
+            (Handling::Recurse, Some(open), 0)
+        }
         // No body to elide or recurse into (e.g. `mod foo;`, `fn f();`, a struct)
         // ⇒ show the declaration verbatim.
         _ => (Handling::ShowFull, None, 0),

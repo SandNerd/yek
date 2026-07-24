@@ -61,7 +61,7 @@ fn detects_language_by_extension() {
     assert_eq!(detect_language("src/App.tsx"), Some(Language::Tsx));
     assert_eq!(detect_language("README.md"), None);
     assert_eq!(detect_language("Makefile"), None);
-    assert_eq!(detect_language("script.py"), None);
+    assert_eq!(detect_language("script.py"), Some(Language::Python));
 }
 
 #[test]
@@ -265,14 +265,8 @@ fn typescript_outline_keeps_signatures_and_elides_bodies() {
         "got:\n{out}"
     );
     assert!(out.contains("function helper(): number"), "got:\n{out}");
-    assert!(
-        !out.contains("Math.PI"),
-        "function body leaked:\n{out}"
-    );
-    assert!(
-        !out.contains("total += i"),
-        "helper body leaked:\n{out}"
-    );
+    assert!(!out.contains("Math.PI"), "function body leaked:\n{out}");
+    assert!(!out.contains("total += i"), "helper body leaked:\n{out}");
     assert!(out.contains("export interface Drawable"), "got:\n{out}");
     assert!(out.contains("draw(): void"), "got:\n{out}");
     assert!(out.contains("export class Point"), "got:\n{out}");
@@ -301,6 +295,9 @@ fn typescript_api_level_keeps_only_exports() {
 #[test]
 fn typescript_name_aliases() {
     assert_eq!(Language::from_name("ts"), Some(Language::TypeScript));
-    assert_eq!(Language::from_name("typescript"), Some(Language::TypeScript));
+    assert_eq!(
+        Language::from_name("typescript"),
+        Some(Language::TypeScript)
+    );
     assert_eq!(Language::from_name("tsx"), Some(Language::Tsx));
 }

@@ -71,7 +71,16 @@ fn render_one(
             let open = sym.body_open.unwrap_or(sym.node.end);
             buf.push_str(&indent);
             buf.push_str(source[sym.lead_start..open].trim_end());
-            buf.push_str(" {\n");
+            match lang.elision() {
+                ElisionStyle::Braces => {
+                    buf.push_str(" {\n");
+                }
+                ElisionStyle::PythonStyle => {
+                    // The `:` is already included in the header slice above
+                    // (body_open points to it), so we just add the newline.
+                    buf.push('\n');
+                }
+            }
             for &child in &sym.children {
                 if api_only && !subtree_visible(symbols, child as usize) {
                     continue;
@@ -79,7 +88,10 @@ fn render_one(
                 render_one(source, lang, symbols, child as usize, api_only, buf);
             }
             buf.push_str(&indent);
-            buf.push_str("}\n");
+            match lang.elision() {
+                ElisionStyle::Braces => buf.push_str("}\n"),
+                ElisionStyle::PythonStyle => {} // Python has no closing delimiter
+            }
         }
     }
 }
@@ -123,6 +135,15 @@ fn elide_marker(lang: Language, lines: u32) -> String {
                 format!(" {{ /* … {lines} lines … */ }}")
             } else {
                 " { /* … */ }".to_string()
+            }
+        }
+        ElisionStyle::PythonStyle => {
+            // The `:` is already part of the header line sliced from source;
+            // the marker provides just the trailing comment.
+            if lines > 1 {
+                format!("  # ... {lines} lines elided ...")
+            } else {
+                "  # ... 1 line elided ...".to_string()
             }
         }
     }

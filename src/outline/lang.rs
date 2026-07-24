@@ -14,6 +14,7 @@ pub enum Language {
     Rust,
     TypeScript,
     Tsx,
+    Python,
 }
 
 /// How to decide whether a declaration is part of the public API.
@@ -23,6 +24,8 @@ pub(crate) enum VisibilityRule {
     Marker(&'static str),
     /// Public iff wrapped by a parent node of this kind (e.g. TS `export_statement`).
     Parent(&'static str),
+    /// Always public (e.g. Python — no `pub`/`export` keyword).
+    Public,
 }
 
 /// How elided bodies are rendered.
@@ -30,12 +33,19 @@ pub(crate) enum VisibilityRule {
 pub(crate) enum ElisionStyle {
     /// C-like: ` { /* … N lines … */ }`.
     Braces,
+    /// Python-style: `: # ... N lines elided ...`.
+    PythonStyle,
 }
 
 impl Language {
     /// All languages compiled into this build.
     pub fn all() -> &'static [Language] {
-        &[Language::Rust, Language::TypeScript, Language::Tsx]
+        &[
+            Language::Rust,
+            Language::TypeScript,
+            Language::Tsx,
+            Language::Python,
+        ]
     }
 
     /// Canonical lowercase name, used by `--outline-languages` and `--json`.
@@ -44,6 +54,7 @@ impl Language {
             Language::Rust => "rust",
             Language::TypeScript => "typescript",
             Language::Tsx => "tsx",
+            Language::Python => "python",
         }
     }
 
@@ -53,6 +64,7 @@ impl Language {
             "rust" | "rs" => Some(Language::Rust),
             "typescript" | "ts" => Some(Language::TypeScript),
             "tsx" => Some(Language::Tsx),
+            "python" | "py" => Some(Language::Python),
             _ => None,
         }
     }
@@ -63,6 +75,7 @@ impl Language {
             Language::Rust => tree_sitter_rust::LANGUAGE.into(),
             Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Language::Python => tree_sitter_python::LANGUAGE.into(),
         }
     }
 
@@ -91,6 +104,7 @@ impl Language {
                 _ => None,
             },
             Language::TypeScript | Language::Tsx => classify_typescript(node_kind),
+            Language::Python => classify_python(node_kind),
         }
     }
 
@@ -100,13 +114,32 @@ impl Language {
             // `export function …` / `export class …` wraps the declaration in
             // an `export_statement` parent rather than attaching a child marker.
             Language::TypeScript | Language::Tsx => VisibilityRule::Parent("export_statement"),
+            // Python has no `pub`/`export` keyword; all top-level names are
+            // effectively public.
+            Language::Python => VisibilityRule::Public,
         }
     }
 
     pub(crate) fn elision(self) -> ElisionStyle {
         match self {
             Language::Rust | Language::TypeScript | Language::Tsx => ElisionStyle::Braces,
+            Language::Python => ElisionStyle::PythonStyle,
         }
+    }
+}
+
+/// Shared classification for Python nodes.
+fn classify_python(node_kind: &str) -> Option<(SymbolKind, Handling)> {
+    match node_kind {
+        "function_definition" => Some((SymbolKind::Function, Handling::Elide)),
+        "class_definition" => Some((SymbolKind::Struct, Handling::Recurse)),
+        // Decorators are not outline-worthy standalone declarations.
+        "decorated_definition" => {
+            // A decorated function/class is handled by classifying its inner
+            // definition; we skip the decorator wrapper itself.
+            None
+        }
+        _ => None,
     }
 }
 
@@ -139,6 +172,7 @@ pub fn detect_language(rel_path: &str) -> Option<Language> {
         "rs" => Some(Language::Rust),
         "ts" => Some(Language::TypeScript),
         "tsx" => Some(Language::Tsx),
+        "py" => Some(Language::Python),
         _ => None,
     }
 }
