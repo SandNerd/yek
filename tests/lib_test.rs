@@ -731,6 +731,36 @@ mod lib_tests {
     }
 
     #[test]
+    fn test_oversized_high_priority_does_not_drop_smaller_files() {
+        // Regression: an oversized high-priority file must be skipped without
+        // wiping smaller, lower-priority files that still fit.
+        let config = YekConfig {
+            token_mode: true,
+            tokens: "20".to_string(),
+            output_template: Some(">>>> FILE_PATH\nFILE_CONTENT".to_string()),
+            ..Default::default()
+        };
+        let files = vec![
+            ProcessedFile::new(
+                "big.txt".to_string(),
+                "word ".repeat(100), // far exceeds the 20-token cap
+                100,
+                0,
+            ),
+            ProcessedFile::new("small.txt".to_string(), "tiny".to_string(), 1, 1),
+        ];
+        let output = concat_files(&files, &config).unwrap();
+        assert!(
+            output.contains("small.txt"),
+            "small lower-priority file should survive: {output}"
+        );
+        assert!(
+            !output.contains("big.txt"),
+            "oversized high-priority file should be skipped: {output}"
+        );
+    }
+
+    #[test]
     fn test_parse_token_limit() {
         assert_eq!(parse_token_limit("1000").unwrap(), 1000);
         assert_eq!(parse_token_limit("1k").unwrap(), 1000);

@@ -24,6 +24,10 @@ pub struct ProcessedFile {
     pub formatted_content: Option<String>,
     /// File category for improved sorting and organization
     pub category: FileCategory,
+    /// Tag of the outline level applied to `content` (e.g. "outline"), or `None`
+    /// when `content` is the verbatim file. Drives the `--json` `level` field.
+    #[serde(skip)]
+    pub outline_level: Option<&'static str>,
 }
 
 impl Clone for ProcessedFile {
@@ -37,6 +41,7 @@ impl Clone for ProcessedFile {
             token_count: OnceLock::new(),
             formatted_content: self.formatted_content.clone(),
             category: self.category,
+            outline_level: self.outline_level,
         }
     }
 }
@@ -55,6 +60,7 @@ impl ProcessedFile {
             token_count: OnceLock::new(),
             formatted_content: None,
             category,
+            outline_level: None,
         }
     }
 
@@ -76,7 +82,16 @@ impl ProcessedFile {
             token_count: OnceLock::new(),
             formatted_content: None,
             category,
+            outline_level: None,
         }
+    }
+
+    /// Replace content (e.g. after outlining) and invalidate size/token caches.
+    pub fn set_content(&mut self, content: String) {
+        self.size_bytes = content.len();
+        self.content = content;
+        self.token_count = OnceLock::new();
+        self.formatted_content = None;
     }
 
     /// Get token count, computing it lazily if not already computed
