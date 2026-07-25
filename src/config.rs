@@ -41,6 +41,18 @@ pub enum OutlineMode {
     Degrade,
 }
 
+impl std::str::FromStr for OutlineMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "off" | "\"off\"" => Ok(Self::Off),
+            "always" | "\"always\"" => Ok(Self::Always),
+            "degrade" | "\"degrade\"" => Ok(Self::Degrade),
+            _ => Err(format!("Unknown outline mode: {s}")),
+        }
+    }
+}
+
 /// The base level of detail used when a file is outlined.
 #[derive(
     Clone,
@@ -64,6 +76,18 @@ pub enum OutlineLevel {
     Symbols,
 }
 
+impl std::str::FromStr for OutlineLevel {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "outline" | "\"outline\"" => Ok(Self::Outline),
+            "api" | "\"api\"" => Ok(Self::Api),
+            "symbols" | "\"symbols\"" => Ok(Self::Symbols),
+            _ => Err(format!("Unknown outline level: {s}")),
+        }
+    }
+}
+
 /// What to do with files whose language has no outline support.
 #[derive(
     Clone,
@@ -83,6 +107,17 @@ pub enum OutlineFallback {
     Full,
     /// Drop the file.
     Omit,
+}
+
+impl std::str::FromStr for OutlineFallback {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "full" | "\"full\"" => Ok(Self::Full),
+            "omit" | "\"omit\"" => Ok(Self::Omit),
+            _ => Err(format!("Unknown outline fallback: {s}")),
+        }
+    }
 }
 
 #[derive(ClapConfigFile, Clone)]
@@ -299,6 +334,15 @@ impl YekConfig {
         // 1) parse from CLI and optional config file:
         let (mut cfg, config_path, _config_format) = YekConfig::parse_info();
 
+        // If a config file was discovered but the macro's serde deserialization
+        // uses kebab-case keys (e.g. "output-dir") while users commonly write
+        // snake_case keys (e.g. "output_dir"), re-read with a key-normalization
+        // pass. We load the raw config, then merge snake_case aliases that were
+        // missed because of serde rename mismatch.
+        if let Some(ref cp) = config_path {
+            cfg.apply_config_value_overrides(cp);
+        }
+
         cfg.apply_config_bool_overrides(config_path.as_deref());
 
         // Handle version flag
@@ -414,6 +458,120 @@ impl YekConfig {
         }
 
         cfg
+    }
+
+    /// Read `yek.yaml` / `yek.toml` / `yek.json` and fill in Option-fields that
+    /// were left as `None` by the macro's kebab-case-only serde rename.
+    /// This lets users write either `output_dir` (snake_case) or `output-dir` (kebab-case).
+    fn apply_config_value_overrides(&mut self, config_path: &Path) {
+        let Ok(settings) = ::config::Config::builder()
+            .add_source(::config::File::from(config_path).required(false))
+            .build()
+        else {
+            return;
+        };
+
+        // Ordered by likelihood of being written in snake_case — try both
+        // snake_case and kebab-case for every value that has an Option<T>
+        // field on YekConfig.
+        macro_rules! try_merge {
+            ($field:ident, $snake:expr, $kebab:expr) => {
+                if self.$field.is_none() {
+                    if let Ok(v) = settings
+                        .get_string($snake)
+                        .or_else(|_| settings.get_string($kebab))
+                    {
+                        self.$field.replace(v);
+                    }
+                }
+            };
+            ($field:ident, $snake:expr, $kebab:expr, vec) => {
+                if self.$field.is_empty() {
+                    if let Ok(arr) = settings
+                        .get_array($snake)
+                        .or_else(|_| settings.get_array($kebab))
+                    {
+                        let items: Vec<String> = arr
+                            .into_iter()
+                            .filter_map(|v| v.into_string().ok())
+                            .collect();
+                        if !items.is_empty() {
+                            self.$field = items;
+                        }
+                    }
+                }
+            };
+        }
+
+        // For non-Option String fields, only override when the current value
+        // matches the built-in default (i.e. the user didn't pass --flag on CLI).
+        macro_rules! try_merge_str {
+            ($field:ident, $snake:expr, $kebab:expr, $default:expr) => {
+                if self.$field == $default {
+                    if let Ok(v) = settings
+                        .get_string($snake)
+                        .or_else(|_| settings.get_string($kebab))
+                    {
+                        self.$field = v;
+                    }
+                }
+            };
+        }
+
+        try_merge!(output_dir, "output_dir", "output-dir");
+        try_merge!(output_name, "output_name", "output-name");
+        try_merge!(output_template, "output_template", "output-template");
+
+        // String fields with a non-Option type — only override if the value
+        // is still the built-in default and the config provides something.
+        try_merge_str!(max_size, "max_size", "max-size", "10MB");
+        try_merge_str!(tokens, "tokens", "tokens", "");
+
+        try_merge!(ignore_patterns, "ignore_patterns", "ignore-patterns", vec);
+        try_merge!(
+            unignore_patterns,
+            "unignore_patterns",
+            "unignore-patterns",
+            vec
+        );
+        try_merge!(
+            outline_languages,
+            "outline_languages",
+            "outline-languages",
+            vec
+        );
+
+        // Outline-mode / level / fallback are enums — try via string
+        if self.outline_mode.is_none() {
+            if let Ok(s) = settings
+                .get_string("outline_mode")
+                .or_else(|_| settings.get_string("outline-mode"))
+            {
+                if let Ok(m) = s.parse::<OutlineMode>() {
+                    self.outline_mode = Some(m);
+                }
+            }
+        }
+        if self.outline_level.is_none() {
+            if let Ok(s) = settings
+                .get_string("outline_level")
+                .or_else(|_| settings.get_string("outline-level"))
+            {
+                if let Ok(l) = s.parse::<OutlineLevel>() {
+                    self.outline_level = Some(l);
+                }
+            }
+        }
+        if self.outline_fallback.is_none() {
+            if let Ok(s) = settings
+                .get_string("outline_fallback")
+                .or_else(|_| settings.get_string("outline-fallback"))
+            {
+                if let Ok(f) = s.parse::<OutlineFallback>() {
+                    self.outline_fallback = Some(f);
+                }
+            }
+        }
     }
 
     fn apply_config_bool_overrides(&mut self, config_path: Option<&Path>) {

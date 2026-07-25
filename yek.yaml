@@ -1,4 +1,4 @@
-output_dir: "./repo-serialized"
+output-dir: "./repo-serialized"
 
 ignore_patterns:
     - "repo-serialized/**"
