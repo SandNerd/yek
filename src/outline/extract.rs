@@ -85,7 +85,7 @@ fn walk(
                 // Override the symbol's byte range to cover the outer
                 // decorated_definition node so @decorators are included.
                 sym.node = child.byte_range();
-                sym.lead_start = child.start_byte();
+                sym.lead_start = lead_start(&child, source);
                 sym.start_row = child.start_position().row;
                 sym.end_row = child.end_position().row;
                 // Name still comes from the inner definition.

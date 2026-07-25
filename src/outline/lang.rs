@@ -133,6 +133,9 @@ fn classify_python(node_kind: &str) -> Option<(SymbolKind, Handling)> {
     match node_kind {
         "function_definition" => Some((SymbolKind::Function, Handling::Elide)),
         "class_definition" => Some((SymbolKind::Struct, Handling::Recurse)),
+        // `typed_assignment` covers class-body annotated variables like
+        // `host: str = "localhost"` in dataclasses and regular classes.
+        "typed_assignment" => Some((SymbolKind::Static, Handling::ShowFull)),
         // Decorators are not outline-worthy standalone declarations.
         "decorated_definition" => {
             // A decorated function/class is handled by classifying its inner
