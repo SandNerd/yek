@@ -427,6 +427,12 @@ impl ParallelFileProcessor {
             gitignore_builder.add(&gitignore_file);
         }
 
+        // Add .ignore file if it exists (custom workspace ignore rules)
+        let ignore_file = dir_path.join(".ignore");
+        if self.context.file_system.path_exists(&ignore_file) {
+            gitignore_builder.add(&ignore_file);
+        }
+
         Ok(Arc::new(gitignore_builder.build()?))
     }
 
