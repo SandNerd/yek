@@ -199,15 +199,12 @@ fn build_symbol(
                     // For Python, the `:` that introduces the body block is not
                     // part of the `body` node.  We adjust `body_open` to the
                     // byte *after* the colon so the rendered header includes
-                    // `:`.  We scan backward from the body to find the colon.
-                    let source_bytes = source.as_bytes();
-                    let mut pos = b.start_byte();
-                    while pos > 0 && source_bytes[pos - 1] != b':' {
-                        pos -= 1;
-                    }
-                    // pos is the byte after `:` because the loop exited when
-                    // source_bytes[pos-1] == ':'.
-                    pos
+                    // `:`.  Use tree-sitter to find the `:` token child of
+                    // the definition node rather than scanning raw bytes.
+                    node.children(&mut node.walk())
+                        .find(|c| c.kind() == ":")
+                        .map(|c| c.end_byte())
+                        .unwrap_or_else(|| b.start_byte())
                 }
                 _ => b.start_byte(),
             };
@@ -222,14 +219,11 @@ fn build_symbol(
         }
         (Handling::Recurse, Some(b)) => {
             let open = match lang.elision() {
-                super::lang::ElisionStyle::PythonStyle => {
-                    let source_bytes = source.as_bytes();
-                    let mut pos = b.start_byte();
-                    while pos > 0 && source_bytes[pos - 1] != b':' {
-                        pos -= 1;
-                    }
-                    pos
-                }
+                super::lang::ElisionStyle::PythonStyle => node
+                    .children(&mut node.walk())
+                    .find(|c| c.kind() == ":")
+                    .map(|c| c.end_byte())
+                    .unwrap_or_else(|| b.start_byte()),
                 _ => b.start_byte(),
             };
             (Handling::Recurse, Some(open), 0)
